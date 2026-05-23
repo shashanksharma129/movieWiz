@@ -11,21 +11,33 @@ _IOS_RE = re.compile(
     r"^\[(\d{1,2}/\d{1,2}/\d{2,4}),\s(\d{1,2}:\d{2}:\d{2}(?:\s?[AP]M)?)\]\s([^:]+?):\s(.+)$"
 )
 
-_SYSTEM_PATTERNS = [
-    r"Messages and calls are end-to-end encrypted",
-    r".+ added .+",
-    r".+ removed .+",
-    r".+ left",
-    r".+ joined using this group's invite link",
-    r".+ changed the (subject|icon|description)",
-    r".+ was added",
-    r"You were added",
-    r"<Media omitted>",
-    r"This message was deleted",
-    r".+ changed their phone number",
-    r".+ created group",
-]
-_SYSTEM_RE = re.compile("|".join(_SYSTEM_PATTERNS), re.IGNORECASE)
+# Exact phrases matched against message text (text_part)
+_SYSTEM_TEXT_RE = re.compile(
+    r"|".join([
+        r"Messages and calls are end-to-end encrypted",
+        r"<Media omitted>",
+        r"This message was deleted",
+        r"You deleted this message",
+    ]),
+    re.IGNORECASE,
+)
+
+# Membership/event patterns matched against sender name only — broad patterns
+# that would false-positive on user messages like "I added Dune to my watchlist"
+_SYSTEM_SENDER_RE = re.compile(
+    r"|".join([
+        r".+ added .+",
+        r".+ removed .+",
+        r".+ left",
+        r".+ joined using this group's invite link",
+        r".+ changed the (?:subject|icon|description)",
+        r".+ was added",
+        r"You were added",
+        r".+ changed their phone number",
+        r".+ created group",
+    ]),
+    re.IGNORECASE,
+)
 
 
 def _parse_timestamp(date_str: str, time_str: str) -> Optional[datetime]:
@@ -74,7 +86,7 @@ def parse(file_bytes: bytes) -> list[dict]:
             date_str, time_str, sender, text_part = match.groups()
             sender = sender.strip()
 
-            if _SYSTEM_RE.search(text_part) or _SYSTEM_RE.search(sender):
+            if _SYSTEM_TEXT_RE.search(text_part) or _SYSTEM_SENDER_RE.search(sender):
                 current = None
                 continue
 

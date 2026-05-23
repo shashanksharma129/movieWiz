@@ -1,10 +1,11 @@
+from enricher import _empty_tmdb
 from thefuzz import process as fuzz_process
 
 _SENTIMENT_SCORES = {"positive": 1.0, "mixed": 0.5, "neutral": 0.5, "negative": 0.0}
 _FUZZY_THRESHOLD = 80
 
 
-def _normalize_titles(raw_movies: list[dict]) -> list[dict]:
+def _normalize_titles(raw_movies: list[dict]) -> dict[str, list[dict]]:
     """Group movie mentions by fuzzy-matched title."""
     canonical: dict[str, list[dict]] = {}
 
@@ -26,10 +27,11 @@ def _normalize_titles(raw_movies: list[dict]) -> list[dict]:
     return canonical
 
 
-def build(raw_extraction: dict, tmdb_data: dict) -> dict:
+def build(raw_extraction: dict) -> dict:
     """
-    Build the final aggregated data model from raw LLM extraction + TMDB data.
-    Returns {"movies": [...], "people": {...}}.
+    Build the final aggregated data model from raw LLM extraction.
+    TMDB metadata is not attached here — call attach_tmdb() after enrichment.
+    Returns {"movies": [...], "people": {...}, "actors_directors": [...]}.
     """
     raw_movies = raw_extraction.get("movies", [])
     raw_actors = raw_extraction.get("actors_directors", [])
@@ -38,8 +40,6 @@ def build(raw_extraction: dict, tmdb_data: dict) -> dict:
 
     movies = []
     for canonical_title, mentions in grouped.items():
-        tmdb = tmdb_data.get(canonical_title, {})
-
         per_person: dict[str, dict] = {}
         sentiment_scores = []
         recommendation_count = 0
@@ -86,11 +86,11 @@ def build(raw_extraction: dict, tmdb_data: dict) -> dict:
         else:
             group_sentiment = "mixed"
 
-        timeline.sort(key=lambda x: x["timestamp"] or "")
+        timeline.sort(key=lambda x: str(x["timestamp"]) if x["timestamp"] else "")
 
         movies.append({
             "title": canonical_title,
-            "tmdb": tmdb,
+            "tmdb": {},
             "group_sentiment": group_sentiment,
             "group_sentiment_score": round(avg_score, 2),
             "mention_count": len(mentions),
@@ -104,10 +104,11 @@ def build(raw_extraction: dict, tmdb_data: dict) -> dict:
 
     movies.sort(key=lambda x: x["mention_count"], reverse=True)
 
-    # Build people summary
+    # Build people summary from grouped mentions (populates recommendation_count and sentiment_scores)
     people: dict[str, dict] = {}
-    for movie in movies:
-        for sender, data in movie["per_person"].items():
+    for canonical_title, mentions in grouped.items():
+        for m in mentions:
+            sender = m.get("mentioned_by", "Unknown")
             if sender not in people:
                 people[sender] = {
                     "total_movie_messages": 0,
@@ -115,12 +116,15 @@ def build(raw_extraction: dict, tmdb_data: dict) -> dict:
                     "recommendation_count": 0,
                     "sentiment_scores": [],
                 }
-            people[sender]["total_movie_messages"] += len(data["quotes"])
-            if movie["title"] not in people[sender]["movies_mentioned"]:
-                people[sender]["movies_mentioned"].append(movie["title"])
+            people[sender]["total_movie_messages"] += 1
+            if canonical_title not in people[sender]["movies_mentioned"]:
+                people[sender]["movies_mentioned"].append(canonical_title)
+            if m.get("recommendation_signal") == "recommended":
+                people[sender]["recommendation_count"] += 1
+            score = float(m.get("sentiment_score") or _SENTIMENT_SCORES.get(m.get("sentiment", "neutral"), 0.5))
+            people[sender]["sentiment_scores"].append(score)
 
-    # Attach actors/directors
-    actors = []
+    # Deduplicate and merge actors/directors
     seen_names: dict[str, dict] = {}
     for a in raw_actors:
         name = a.get("name", "").strip()
@@ -148,3 +152,9 @@ def build(raw_extraction: dict, tmdb_data: dict) -> dict:
     actors = list(seen_names.values())
 
     return {"movies": movies, "people": people, "actors_directors": actors}
+
+
+def attach_tmdb(movies: list[dict], tmdb_data: dict) -> None:
+    """Attach TMDB metadata to each movie in-place, keyed by canonical title."""
+    for movie in movies:
+        movie["tmdb"] = tmdb_data.get(movie["title"], _empty_tmdb())

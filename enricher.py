@@ -1,4 +1,6 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 from dotenv import load_dotenv
 
@@ -35,31 +37,37 @@ def _get_details(tmdb_id: int, api_key: str) -> dict:
         return {}
 
 
+def _enrich_one(title: str, api_key: str) -> tuple[str, dict]:
+    hit = _search_movie(title, api_key)
+    if not hit:
+        return title, _empty_tmdb()
+
+    details = _get_details(hit["id"], api_key)
+    poster_path = hit.get("poster_path") or details.get("poster_path")
+    genres = [g["name"] for g in details.get("genres", [])]
+
+    return title, {
+        "tmdb_id": hit["id"],
+        "poster_url": f"{_IMAGE_BASE}{poster_path}" if poster_path else None,
+        "genres": genres,
+        "year": (hit.get("release_date") or "")[:4] or None,
+        "tmdb_score": round(hit.get("vote_average", 0), 1),
+        "overview": details.get("overview") or hit.get("overview", ""),
+    }
+
+
 def enrich(movie_titles: list[str]) -> dict[str, dict]:
-    """Return a dict mapping movie title → TMDB metadata."""
+    """Return a dict mapping movie title -> TMDB metadata."""
     api_key = os.getenv("TMDB_API_KEY")
     if not api_key:
         return {t: _empty_tmdb() for t in movie_titles}
 
     result = {}
-    for title in movie_titles:
-        hit = _search_movie(title, api_key)
-        if not hit:
-            result[title] = _empty_tmdb()
-            continue
-
-        details = _get_details(hit["id"], api_key)
-        poster_path = hit.get("poster_path") or details.get("poster_path")
-        genres = [g["name"] for g in details.get("genres", [])]
-
-        result[title] = {
-            "tmdb_id": hit["id"],
-            "poster_url": f"{_IMAGE_BASE}{poster_path}" if poster_path else None,
-            "genres": genres,
-            "year": (hit.get("release_date") or "")[:4] or None,
-            "tmdb_score": round(hit.get("vote_average", 0), 1),
-            "overview": details.get("overview") or hit.get("overview", ""),
-        }
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_enrich_one, title, api_key): title for title in movie_titles}
+        for future in as_completed(futures):
+            title, data = future.result()
+            result[title] = data
 
     return result
 

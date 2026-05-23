@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 _MODEL = "claude-sonnet-4-6"
-_CHUNK_SIZE = 50
+_CHUNK_SIZE = 100
 
 _SYSTEM_PROMPT = """You are a movie discussion analyst specializing in Hinglish text (a mix of English and Hindi written in Roman script). Your task is to extract structured data from WhatsApp chat messages about movies.
 
@@ -109,7 +109,11 @@ def extract(messages: list[dict]) -> dict:
     chunks = [messages[i : i + _CHUNK_SIZE] for i in range(0, len(messages), _CHUNK_SIZE)]
 
     for chunk in chunks:
-        result = _parse_chunk(client, chunk)
+        try:
+            result = _parse_chunk(client, chunk)
+        except Exception as e:
+            print(f"Warning: chunk failed ({e}), skipping")
+            result = {"movies": [], "actors_directors": []}
         all_movies.extend(result.get("movies", []))
         all_actors.extend(result.get("actors_directors", []))
 

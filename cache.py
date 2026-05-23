@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-_CACHE_DIR = Path(".cache")
+_CACHE_DIR = Path(__file__).parent / ".cache"
 
 
 def _key(file_bytes: bytes) -> str:
@@ -16,8 +16,12 @@ def load(file_bytes: bytes) -> tuple[dict | None, str]:
     key = _key(file_bytes)
     path = _CACHE_DIR / f"{key}.json"
     if path.exists():
-        with open(path) as f:
-            return json.load(f), key
+        try:
+            with open(path) as f:
+                return json.load(f), key
+        except (json.JSONDecodeError, OSError):
+            path.unlink(missing_ok=True)
+            return None, key
     return None, key
 
 

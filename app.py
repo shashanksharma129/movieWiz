@@ -13,6 +13,12 @@ import aggregator
 
 load_dotenv()
 
+_SENTIMENT_BADGE = {
+    "positive": "🟢 Positive",
+    "mixed": "🟡 Mixed",
+    "negative": "🔴 Negative",
+}
+
 st.set_page_config(
     page_title="movieWiz",
     page_icon="🎬",
@@ -47,7 +53,7 @@ with st.sidebar:
 
 # ── Run pipeline ─────────────────────────────────────────────────────────────
 
-if analyze_btn and uploaded_file is not None:
+if analyze_btn:
     if anthropic_key:
         os.environ["ANTHROPIC_API_KEY"] = anthropic_key
     if tmdb_key:
@@ -55,7 +61,11 @@ if analyze_btn and uploaded_file is not None:
 
     file_bytes = uploaded_file.read()
 
-    cached_data, cache_key = cache.load(file_bytes)
+    try:
+        cached_data, cache_key = cache.load(file_bytes)
+    except Exception as e:
+        st.warning(f"Cache error: {e}. Running fresh analysis.")
+        cached_data, cache_key = None, cache._key(file_bytes)
 
     if cached_data:
         st.session_state["data"] = cached_data
@@ -72,13 +82,13 @@ if analyze_btn and uploaded_file is not None:
                 st.error(str(e))
                 st.stop()
 
-        unique_titles = list({m["title"] for m in raw["movies"] if m.get("title")})
+        with st.spinner("Building dashboard…"):
+            data = aggregator.build(raw)
 
         with st.spinner("Fetching movie data from TMDB…"):
-            tmdb_data = enricher.enrich(unique_titles)
-
-        with st.spinner("Building dashboard…"):
-            data = aggregator.build(raw, tmdb_data)
+            canonical_titles = [m["title"] for m in data["movies"]]
+            tmdb_data = enricher.enrich(canonical_titles)
+            aggregator.attach_tmdb(data["movies"], tmdb_data)
 
         cache.save(cache_key, data)
         st.session_state["data"] = data
@@ -102,8 +112,8 @@ if not movies:
     st.warning("No movies were found in this chat. Try a different export.")
     st.stop()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["Overview", "Movie Explorer", "Who Talks Most", "Sentiment Deep Dive", "Timeline"]
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    ["Overview", "Movie Explorer", "Who Talks Most", "Sentiment Deep Dive", "Timeline", "Actors & Directors"]
 )
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -136,12 +146,6 @@ with tab1:
 
 with tab2:
     st.header("Movie Explorer")
-
-    _SENTIMENT_BADGE = {
-        "positive": "🟢 Positive",
-        "mixed": "🟡 Mixed",
-        "negative": "🔴 Negative",
-    }
 
     cols = st.columns(3)
     for i, movie in enumerate(movies):
@@ -306,3 +310,29 @@ with tab5:
                 title="Daily Movie Mentions",
             )
             st.plotly_chart(fig6, use_container_width=True)
+
+# ── Tab 6: Actors & Directors ─────────────────────────────────────────────────
+
+with tab6:
+    st.header("Actors & Directors")
+
+    if not actors:
+        st.info("No actors or directors were mentioned in this chat.")
+    else:
+        df_actors = pd.DataFrame([
+            {
+                "Name": a["name"],
+                "Role": a["role"].capitalize(),
+                "Mentioned By": ", ".join(a["mentioned_by"]),
+                "Movies": ", ".join(a["associated_movies"]),
+            }
+            for a in actors
+        ])
+        st.dataframe(df_actors, use_container_width=True)
+
+        st.subheader("Quotes")
+        for a in actors:
+            if a["contexts"]:
+                with st.expander(f"{a['name']} ({a['role']})"):
+                    for ctx in a["contexts"]:
+                        st.markdown(f"> *{ctx}*")
