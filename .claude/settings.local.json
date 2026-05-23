@@ -4,7 +4,9 @@
       "Bash(.venv/bin/python *)",
       "Bash(.venv/bin/pip install *)",
       "Bash(uv add *)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "WebFetch(domain:docs.streamlit.io)",
+      "Bash(uv lock *)"
     ]
   }
 }

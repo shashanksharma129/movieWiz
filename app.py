@@ -32,22 +32,20 @@ st.set_page_config(
 
 # ── Auth gate ─────────────────────────────────────────────────────────────────
 
-try:
-    _logged_in = st.user.is_logged_in
-except AttributeError:
-    st.error(
-        "Authentication is not configured. "
-        "Add `[auth]` credentials to your Streamlit secrets and redeploy."
-    )
-    st.stop()
+_app_password = st.secrets.get("app_password", "")
 
-if not _logged_in:
+if not st.session_state.get("authenticated"):
     st.title("movieWiz 🎬")
-    st.markdown("Sign in to analyse your WhatsApp movie chats.")
-    st.button("Sign in with Google", on_click=st.login, type="primary")
+    pwd = st.text_input("Password", type="password")
+    if st.button("Sign in", type="primary"):
+        if _app_password and pwd == _app_password:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
     st.stop()
 
-user_id = st.user.email
+user_id = "shared"
 
 # ── Secrets / API keys ────────────────────────────────────────────────────────
 # Keys in Streamlit secrets take precedence; sidebar inputs are shown as fallback
@@ -60,8 +58,9 @@ _secrets_tmdb = st.secrets.get("TMDB_API_KEY", "")
 
 with st.sidebar:
     st.title("movieWiz")
-    st.caption(f"Signed in as {st.user.name or user_id}")
-    st.button("Sign out", on_click=st.logout, use_container_width=True)
+    if st.button("Sign out", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
     st.divider()
 
     saved = sessions.list_sessions(user_id)
