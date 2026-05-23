@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.backends.legacy:build"
+
 [project]
 name = "moviewiz"
 version = "0.1.0"
-description = "Add your description here"
+description = "AI-powered WhatsApp movie chat analyzer"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -13,3 +17,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "thefuzz[speedup]>=0.20.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

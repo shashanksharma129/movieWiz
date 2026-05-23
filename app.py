@@ -1,15 +1,20 @@
 import os
-import streamlit as st
+import shutil
+from pathlib import Path
+
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import pandas as pd
+import streamlit as st
 from dotenv import load_dotenv
 
-import cache
-import parser
-import extractor
-import enricher
 import aggregator
+import cache
+import enricher
+import extractor
+import parser
+import sessions
+import summarizer
 
 load_dotenv()
 
@@ -25,31 +30,99 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── Auth gate ─────────────────────────────────────────────────────────────────
+
+if not st.user.is_logged_in:
+    st.title("movieWiz 🎬")
+    st.markdown("Sign in to analyse your WhatsApp movie chats.")
+    st.button("Sign in with Google", on_click=st.login, type="primary")
+    st.stop()
+
+user_id = st.user.email
+
+# ── Secrets / API keys ────────────────────────────────────────────────────────
+# Keys in Streamlit secrets take precedence; sidebar inputs are shown as fallback
+# so local dev still works without a secrets.toml.
+
+_secrets_anthropic = st.secrets.get("ANTHROPIC_API_KEY", "")
+_secrets_tmdb = st.secrets.get("TMDB_API_KEY", "")
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("movieWiz")
-    st.caption("WhatsApp chat movie analyzer")
+    st.caption(f"Signed in as {st.user.name or user_id}")
+    st.button("Sign out", on_click=st.logout, use_container_width=True)
+    st.divider()
 
+    saved = sessions.list_sessions(user_id)
+    load_btn = False
+    del_btn = False
+    chosen_idx = 0
+    if saved:
+        st.subheader("Saved Sessions")
+        session_labels = [f"{s['name']}  ({s['movie_count']} movies)" for s in saved]
+        chosen_label = st.selectbox("Select a session", session_labels, label_visibility="collapsed")
+        chosen_idx = session_labels.index(chosen_label)
+        col_load, col_del = st.columns(2)
+        load_btn = col_load.button("Load", use_container_width=True)
+        del_btn = col_del.button("Delete", use_container_width=True)
+        st.divider()
+
+    st.subheader("New Analysis")
     uploaded_file = st.file_uploader("Upload WhatsApp chat export (.txt)", type=["txt"])
 
-    anthropic_key = st.text_input(
-        "Anthropic API Key",
-        value=os.getenv("ANTHROPIC_API_KEY", ""),
-        type="password",
-        help="Required for LLM extraction",
-    )
-    tmdb_key = st.text_input(
-        "TMDB API Key",
-        value=os.getenv("TMDB_API_KEY", ""),
-        type="password",
-        help="Required for movie posters and metadata",
-    )
+    if _secrets_anthropic:
+        anthropic_key = _secrets_anthropic
+    else:
+        anthropic_key = st.text_input(
+            "Anthropic API Key",
+            value=os.getenv("ANTHROPIC_API_KEY", ""),
+            type="password",
+            help="Required for LLM extraction",
+        )
 
+    if _secrets_tmdb:
+        tmdb_key = _secrets_tmdb
+    else:
+        tmdb_key = st.text_input(
+            "TMDB API Key",
+            value=os.getenv("TMDB_API_KEY", ""),
+            type="password",
+            help="Required for movie posters and metadata",
+        )
+
+    session_name_input = st.text_input(
+        "Session name (optional)",
+        placeholder="e.g. Friends group chat",
+    )
     analyze_btn = st.button("Analyze Chat", type="primary", disabled=uploaded_file is None)
+
+    if st.button("Clear all caches", type="secondary"):
+        if cache.CACHE_DIR.exists():
+            shutil.rmtree(cache.CACHE_DIR)
+        st.session_state.clear()
+        st.rerun()
 
     if "cache_status" in st.session_state:
         st.caption(st.session_state["cache_status"])
+
+# ── Session load / delete ────────────────────────────────────────────────────
+
+if saved and load_btn:
+    chosen_name = saved[chosen_idx]["name"]
+    loaded = sessions.load_by_name(chosen_name, user_id)
+    if loaded is None:
+        st.sidebar.error("Session data not found on disk.")
+    else:
+        st.session_state["data"] = loaded
+        st.session_state["alias_map"] = loaded.get("alias_map", {})
+        st.session_state["cache_status"] = f"Loaded session: {chosen_name}"
+        st.rerun()
+
+if saved and del_btn:
+    sessions.delete(saved[chosen_idx]["name"], user_id)
+    st.rerun()
 
 # ── Run pipeline ─────────────────────────────────────────────────────────────
 
@@ -61,6 +134,14 @@ if analyze_btn:
 
     file_bytes = uploaded_file.read()
 
+    _MAX_FILE_BYTES = 5 * 1024 * 1024
+    if len(file_bytes) > _MAX_FILE_BYTES:
+        st.error(
+            f"File is {len(file_bytes) / 1024 / 1024:.1f} MB — limit is 5 MB. "
+            "Export a smaller date range from WhatsApp."
+        )
+        st.stop()
+
     try:
         cached_data, cache_key = cache.load(file_bytes)
     except Exception as e:
@@ -69,11 +150,13 @@ if analyze_btn:
 
     if cached_data:
         st.session_state["data"] = cached_data
+        st.session_state["alias_map"] = cached_data.get("alias_map", {})
         st.session_state["cache_status"] = "Using cached analysis"
     else:
         st.session_state["cache_status"] = "Running fresh analysis…"
         with st.spinner("Parsing chat…"):
-            messages = parser.parse(file_bytes)
+            messages, alias_map = parser.parse(file_bytes)
+            st.session_state["alias_map"] = alias_map
 
         with st.spinner(f"Analyzing {len(messages)} messages with AI (may take a minute)…"):
             try:
@@ -90,7 +173,13 @@ if analyze_btn:
             tmdb_data = enricher.enrich(canonical_titles)
             aggregator.attach_tmdb(data["movies"], tmdb_data)
 
+        with st.spinner("Generating opinion summaries…"):
+            summarizer.summarize(data["movies"])
+
+        data["alias_map"] = alias_map
         cache.save(cache_key, data)
+        if name := session_name_input.strip():
+            sessions.register(name, cache_key, len(data["movies"]), user_id)
         st.session_state["data"] = data
         st.session_state["cache_status"] = "Fresh analysis complete — cached for next time"
 
@@ -112,8 +201,8 @@ if not movies:
     st.warning("No movies were found in this chat. Try a different export.")
     st.stop()
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-    ["Overview", "Movie Explorer", "Who Talks Most", "Sentiment Deep Dive", "Timeline", "Actors & Directors"]
+tab1, tab2, tab4, tab5, tab6 = st.tabs(
+    ["Overview", "Movie Explorer", "Sentiment Deep Dive", "Timeline", "Actors & Directors"]
 )
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -129,6 +218,11 @@ with tab1:
     col3.metric("Most Discussed", top_movie)
     col4.metric("Most Active", top_person)
 
+    if alias_map := st.session_state.get("alias_map", {}):
+        with st.expander(f"{len(alias_map)} phone number(s) anonymised"):
+            for num, label in alias_map.items():
+                st.caption(f"{label} — {num}")
+
     st.subheader("Top Movies by Mention Count")
     top_n = movies[:15]
     fig = px.bar(
@@ -141,6 +235,24 @@ with tab1:
     )
     fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=400)
     st.plotly_chart(fig, use_container_width=True)
+
+    if people:
+        st.subheader("Top Contributors")
+        df_contrib = pd.DataFrame(
+            [
+                {
+                    "Person": p,
+                    "Movie Messages": d["total_movie_messages"],
+                    "Movies Mentioned": len(d["movies_mentioned"]),
+                    "Recommendations": d["recommendation_count"],
+                    "Avg Sentiment": round(
+                        sum(d["sentiment_scores"]) / len(d["sentiment_scores"]), 2
+                    ) if d["sentiment_scores"] else "—",
+                }
+                for p, d in people.items()
+            ]
+        ).sort_values("Movie Messages", ascending=False)
+        st.dataframe(df_contrib, use_container_width=True, hide_index=True)
 
 # ── Tab 2: Movie Explorer ─────────────────────────────────────────────────────
 
@@ -171,52 +283,16 @@ with tab2:
 
             with st.expander("Per-person opinions"):
                 for person, pdata in movie["per_person"].items():
-                    quotes = pdata.get("quotes", [])
-                    rating = pdata.get("rating", "")
-                    rating_str = f" ({rating})" if rating else ""
-                    st.markdown(f"**{person}**{rating_str}: {pdata.get('sentiment', '—')}")
-                    for q in quotes[:3]:
-                        st.markdown(f"> *{q}*")
+                    rating_str = f" ({pdata['rating']})" if pdata.get("rating") else ""
+                    st.markdown(f"**{person}**{rating_str}")
+                    if summary := pdata.get("summary"):
+                        st.markdown(summary)
+                    if pdata.get("quotes"):
+                        with st.expander("Raw quotes", expanded=False):
+                            for q in pdata["quotes"][:3]:
+                                st.markdown(f"> *{q}*")
 
             st.divider()
-
-# ── Tab 3: Who Talks Most ─────────────────────────────────────────────────────
-
-with tab3:
-    st.header("Who Talks About Movies Most")
-
-    if not people:
-        st.info("No people data available.")
-    else:
-        df_people = pd.DataFrame(
-            [
-                {
-                    "Person": p,
-                    "Movie Messages": d["total_movie_messages"],
-                    "Movies Mentioned": len(d["movies_mentioned"]),
-                }
-                for p, d in people.items()
-            ]
-        ).sort_values("Movie Messages", ascending=False)
-
-        fig2 = px.bar(
-            df_people,
-            x="Person",
-            y="Movie Messages",
-            color="Movies Mentioned",
-            color_continuous_scale="Blues",
-            title="Movie-Related Messages per Person",
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-
-        st.subheader("Movies Mentioned per Person")
-        fig3 = px.bar(
-            df_people,
-            x="Person",
-            y="Movies Mentioned",
-            title="Unique Movies Each Person Discussed",
-        )
-        st.plotly_chart(fig3, use_container_width=True)
 
 # ── Tab 4: Sentiment Deep Dive ────────────────────────────────────────────────
 

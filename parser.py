@@ -1,6 +1,8 @@
 import re
 from datetime import datetime
 
+_PHONE_RE = re.compile(r'^\+?[0-9][\d\s\-(). ]{6,}$')
+
 # Android: "DD/MM/YYYY, HH:MM - Name: message"
 _ANDROID_RE = re.compile(
     r"^(\d{1,2}/\d{1,2}/\d{2,4}),\s(\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AP]M)?)\s-\s([^:]+?):\s(.+)$"
@@ -64,7 +66,7 @@ def _parse_timestamp(date_str: str, time_str: str) -> datetime | None:
     return None
 
 
-def parse(file_bytes: bytes) -> list[dict]:
+def parse(file_bytes: bytes) -> tuple[list[dict], dict[str, str]]:
     try:
         text = file_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -73,6 +75,7 @@ def parse(file_bytes: bytes) -> list[dict]:
     lines = text.splitlines()
     messages = []
     current: dict | None = None
+    aliases: dict[str, str] = {}
 
     for line in lines:
         line = line.strip()
@@ -83,6 +86,10 @@ def parse(file_bytes: bytes) -> list[dict]:
         if match:
             date_str, time_str, sender, text_part = match.groups()
             sender = sender.strip()
+
+            if _PHONE_RE.match(sender) and sender not in aliases:
+                aliases[sender] = f"Contact {len(aliases) + 1}"
+            sender = aliases.get(sender, sender)
 
             if _SYSTEM_TEXT_RE.search(text_part) or _SYSTEM_SENDER_RE.search(sender):
                 current = None
@@ -95,4 +102,4 @@ def parse(file_bytes: bytes) -> list[dict]:
             if current is not None:
                 current["text"] += "\n" + line
 
-    return messages
+    return messages, aliases

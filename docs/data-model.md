@@ -1,8 +1,8 @@
 # Data Model
 
-This document describes the JSON structure stored in `.cache/<md5>.json` and held in `st.session_state["data"]` at runtime.
+This document describes the JSON structure stored in `.cache/<hash>.json` and held in `st.session_state["data"]` at runtime.
 
-The top-level object has three keys: `movies`, `people`, and `actors_directors`.
+The top-level object has four keys: `movies`, `people`, `actors_directors`, and `alias_map`.
 
 ---
 
@@ -12,7 +12,8 @@ The top-level object has three keys: `movies`, `people`, and `actors_directors`.
 {
   "movies": [ ... ],
   "people": { ... },
-  "actors_directors": [ ... ]
+  "actors_directors": [ ... ],
+  "alias_map": { ... }
 }
 ```
 
@@ -47,12 +48,14 @@ Each entry represents one canonical movie (after fuzzy title deduplication).
     "Rahul": {
       "sentiment": "positive",
       "quotes": ["bhai dune 2 dekh lia? ekdum zabardast tha"],
-      "rating": "9/10"
+      "rating": "9/10",
+      "summary": "Rahul loved Dune: Part Two, calling it 'ekdum zabardast' and strongly recommending it with a 9/10 rating."
     },
     "Priya": {
       "sentiment": "mixed",
       "quotes": ["first half slow tha but second half mast tha"],
-      "rating": null
+      "rating": null,
+      "summary": "Priya had mixed feelings — she found the first half slow but thoroughly enjoyed the second half."
     }
   },
 
@@ -81,15 +84,16 @@ Each entry represents one canonical movie (after fuzzy title deduplication).
 | `tmdb.tmdb_score` | float \| null | TMDB vote average (0–10) |
 | `tmdb.overview` | string | Plot summary from TMDB |
 | `group_sentiment` | "positive" \| "mixed" \| "negative" | Aggregate group opinion |
-| `group_sentiment_score` | float 0–1 | Average sentiment score (0=negative, 1=positive) |
+| `group_sentiment_score` | float 0–1 | Average sentiment score across all mentions |
 | `mention_count` | int | Total number of times this movie was mentioned |
 | `recommendations` | int | Count of "must watch" / recommended signals |
 | `avoid_signals` | int | Count of "skip karo" / avoid signals |
 | `explicit_ratings` | list[string] | All explicit ratings found (e.g. "8/10", "4 stars") |
 | `per_person` | dict[str, PersonData] | Per-sender opinion data |
 | `per_person[].sentiment` | string | Dominant sentiment for this person's mentions |
-| `per_person[].quotes` | list[string] | Raw message snippets (up to 3 stored) |
+| `per_person[].quotes` | list[string] | Raw message snippets |
 | `per_person[].rating` | string \| null | First explicit rating this person gave |
+| `per_person[].summary` | string \| null | AI-generated 1–2 sentence opinion (null if skipped or failed) |
 | `first_mentioned_at` | string \| null | ISO timestamp of the earliest mention |
 | `timeline` | list[TimelineEvent] | All mentions in chronological order |
 | `timeline[].timestamp` | string \| null | ISO timestamp |
@@ -100,15 +104,15 @@ Each entry represents one canonical movie (after fuzzy title deduplication).
 
 ## `people` — dict of person summaries
 
-Keyed by sender name as it appears in the chat.
+Keyed by sender name as it appears in the chat (phone numbers are aliased to "Contact N" before this point).
 
 ```json
 {
   "Rahul": {
     "total_movie_messages": 23,
     "movies_mentioned": ["Dune: Part Two", "RRR", "Oppenheimer"],
-    "recommendation_count": 0,
-    "sentiment_scores": []
+    "recommendation_count": 4,
+    "sentiment_scores": [1.0, 0.9, 0.5, 1.0]
   }
 }
 ```
@@ -117,16 +121,16 @@ Keyed by sender name as it appears in the chat.
 
 | Field | Type | Description |
 |---|---|---|
-| `total_movie_messages` | int | Total quotes across all movies for this person |
+| `total_movie_messages` | int | Total movie-related messages this person sent |
 | `movies_mentioned` | list[string] | Canonical titles this person discussed |
-| `recommendation_count` | int | Reserved — not yet populated (see roadmap) |
-| `sentiment_scores` | list | Reserved — not yet populated (see roadmap) |
+| `recommendation_count` | int | Number of "recommended" signals from this person |
+| `sentiment_scores` | list[float] | Per-mention sentiment scores (0=negative, 1=positive) |
 
 ---
 
 ## `actors_directors` — list of person entities
 
-People mentioned in the chat in the context of movies (not chat participants).
+People mentioned in the chat in the context of movies (not chat participants). Rendered in the Actors & Directors tab.
 
 ```json
 [
@@ -152,8 +156,23 @@ People mentioned in the chat in the context of movies (not chat participants).
 
 ---
 
+## `alias_map` — phone number anonymisation map
+
+Present when the chat contained phone numbers as sender names (contacts not saved in the uploader's address book).
+
+```json
+{
+  "+91 98765 43210": "Contact 1",
+  "+61 413 937 111": "Contact 2"
+}
+```
+
+Keys are original phone number strings exactly as they appeared in the WhatsApp export. Values are the stable aliases used everywhere else in the data model — in `per_person` keys, `people` keys, and `timeline` sender fields. This map is stored in the cache so the Overview tab can render the "N phone numbers anonymised" expander on session reload.
+
+---
+
 ## Notes
 
-- All timestamps in the cache are serialized as ISO 8601 strings (e.g. `"2024-03-10T14:22:00"`). The Streamlit app uses `pd.to_datetime(errors="coerce")` when rendering charts.
-- The `actors_directors` list is fully extracted and cached but not yet rendered in a dedicated dashboard tab. It is available for future use.
-- The `people[].recommendation_count` and `people[].sentiment_scores` fields are initialized but not yet computed — they are reserved for a future per-person sentiment overview feature.
+- All timestamps in the cache are serialized as ISO 8601 strings (e.g. `"2024-03-10T14:22:00"`). The app uses `pd.to_datetime(errors="coerce")` when rendering charts.
+- `alias_map` may be an empty dict `{}` if no phone numbers were detected.
+- `per_person[].summary` is `null` when the summarizer was skipped (no quotes + neutral sentiment) or encountered an API error for that movie.

@@ -5,6 +5,8 @@ from datetime import datetime
 import anthropic
 from dotenv import load_dotenv
 
+from utils import with_retry
+
 load_dotenv()
 
 _MODEL = "claude-sonnet-4-6"
@@ -108,9 +110,9 @@ def extract(messages: list[dict]) -> dict:
 
     for chunk in chunks:
         try:
-            result = _parse_chunk(client, chunk)
+            result = with_retry(_parse_chunk, client, chunk)
         except Exception as e:
-            print(f"Warning: chunk failed ({e}), skipping")
+            print(f"Warning: chunk failed after retries ({e}), skipping")
             result = {"movies": [], "actors_directors": []}
         all_movies.extend(result.get("movies", []))
         all_actors.extend(result.get("actors_directors", []))

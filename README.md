@@ -1,18 +1,21 @@
 # movieWiz
 
-An AI-powered tool that turns your WhatsApp movie group chat into an interactive analytics dashboard. Upload a chat export, and movieWiz extracts every movie discussed, infers sentiments from Hinglish conversations, fetches posters and metadata from TMDB, and visualizes it all across five tabs.
+An AI-powered tool that turns your WhatsApp movie group chat into an interactive analytics dashboard. Upload a chat export, and movieWiz extracts every movie discussed, infers sentiments from Hinglish conversations, generates per-person opinion summaries, fetches posters and metadata from TMDB, and visualizes it all across a five-tab dashboard.
 
 ---
 
 ## Features
 
 - **Hinglish-aware extraction** — understands "mast tha", "bakwaas tha", "must watch bhai" and similar expressions using Claude Sonnet 4.6
-- **Per-person attribution** — tracks who said what about which movie
-- **TMDB enrichment** — auto-fetches posters, genres, release year, and TMDB score for every identified movie
-- **Sentiment analysis** — positive / mixed / negative classification per movie and per person, with explicit rating capture (e.g. "8/10")
+- **AI opinion summaries** — synthesizes each person's quotes and sentiment into a 1–2 sentence natural-language opinion per movie
+- **PII protection** — phone numbers used as WhatsApp sender names are detected and replaced with stable aliases ("Contact 1", "Contact 2") before reaching any LLM or UI
+- **Per-person attribution** — tracks who said what about which movie, with explicit rating capture (e.g. "8/10")
+- **TMDB enrichment** — auto-fetches posters, genres, release year, and TMDB score for every identified movie (concurrent requests)
+- **Sentiment analysis** — positive / mixed / negative classification per movie and per person
 - **Recommendation signals** — identifies "must watch" vs "avoid karo" signals
-- **MD5 caching** — results are cached locally so re-opening the same chat skips all LLM calls
-- **Five-tab Streamlit dashboard**: Overview, Movie Explorer, Who Talks Most, Sentiment Deep Dive, Timeline
+- **Named sessions** — save analyses by name (e.g. "Friends group chat") and reload them instantly without re-uploading or re-running the pipeline
+- **Versioned cache** — results cached locally; cache version string invalidates stale entries when the pipeline changes
+- **Five-tab Streamlit dashboard**: Overview, Movie Explorer, Sentiment Deep Dive, Timeline, Actors & Directors
 
 ---
 
@@ -35,7 +38,7 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
 # 3. Install dependencies
-pip install -r requirements.txt
+pip install -e .
 
 # 4. Configure API keys
 cp .env.example .env
@@ -45,7 +48,7 @@ cp .env.example .env
 streamlit run app.py
 ```
 
-You can also enter API keys directly in the Streamlit sidebar without a `.env` file.
+You can also enter API keys directly in the Streamlit sidebar — no `.env` file required.
 
 ---
 
@@ -63,9 +66,10 @@ Open the group chat → Tap the group name → Export Chat → Without Media →
 
 1. Open the app at `http://localhost:8501`
 2. Upload your `.txt` chat export using the sidebar file uploader
-3. Click **Analyze Chat**
-4. Wait ~1–2 minutes for the first run (LLM extraction + TMDB lookups)
-5. Subsequent runs on the same file are instant (local cache hit)
+3. (Optional) Enter a session name, e.g. "Friends group chat"
+4. Click **Analyze Chat**
+5. Wait ~1–3 minutes for the first run (LLM extraction + summaries + TMDB lookups)
+6. On return visits, pick a saved session from the sidebar and click **Load** — instant, no LLM costs
 
 ---
 
@@ -75,23 +79,33 @@ Open the group chat → Tap the group name → Export Chat → Without Media →
 Upload .txt
     │
     ▼
-parser.py       Parse messages, filter system events, handle multi-line
+parser.py       Parse messages, detect + alias phone-number senders, filter system events
     │
     ▼
-cache.py        MD5 check — skip LLM on cache hit
+cache.py        Version-aware MD5 check — skip LLM on cache hit
     │ (miss)
     ▼
-extractor.py    Claude Sonnet 4.6, chunked in batches of 50 messages
+extractor.py    Claude Sonnet 4.6, chunked in batches of 100 messages
                 Prompt caching on system prompt reduces cost on repeat runs
     │
     ▼
 aggregator.py   Fuzzy-dedup titles, merge per-person data, compute group sentiment
+                (TMDB data not yet attached — canonical titles finalized here)
+    │
+    ├── canonical titles ──► enricher.py    Concurrent TMDB Search + Details per movie
+    │                                        {title: tmdb_data, ...}
+    │                              │
+    │                              ▼
+    │                       aggregator.attach_tmdb()
     │
     ▼
-enricher.py     TMDB Search + Details API per unique movie
+summarizer.py   One Claude call per movie — synthesizes per-person opinion summaries
     │
     ▼
-cache.py        Save result to .cache/<md5>.json
+cache.py        Save result (including alias_map + summaries) to .cache/<hash>.json
+    │
+    ▼
+sessions.py     Register under user-provided name in .cache/sessions.json (if named)
     │
     ▼
 app.py          Render 5-tab Streamlit dashboard
@@ -103,20 +117,22 @@ app.py          Render 5-tab Streamlit dashboard
 
 ```
 movieWiz/
-├── app.py              Main Streamlit dashboard (5 tabs)
-├── parser.py           WhatsApp .txt parser (Android + iOS formats)
+├── app.py              Main Streamlit dashboard (5 tabs + session sidebar)
+├── parser.py           WhatsApp .txt parser (Android + iOS formats, PII aliasing)
 ├── extractor.py        LLM entity extraction via Anthropic SDK
-├── enricher.py         TMDB API enrichment
+├── enricher.py         Concurrent TMDB API enrichment
 ├── aggregator.py       Data aggregation and fuzzy title deduplication
-├── cache.py            MD5-keyed local JSON cache
-├── requirements.txt
+├── summarizer.py       Per-person opinion summarization via Claude
+├── cache.py            Versioned MD5-keyed local JSON cache
+├── sessions.py         Named session registry (.cache/sessions.json)
+├── pyproject.toml
 ├── .env.example        API key template
 ├── .gitignore
 ├── docs/
 │   ├── architecture.md     Detailed module and data flow documentation
 │   ├── data-model.md       JSON schema of the aggregated output
 │   └── api-keys.md         Guide to obtaining required API keys
-└── .cache/             Auto-created, gitignored — stores analysis results
+└── .cache/             Auto-created, gitignored — stores analysis results + session index
 ```
 
 ---
@@ -125,7 +141,7 @@ movieWiz/
 
 | Component | Library |
 |---|---|
-| LLM extraction | `anthropic` — Claude Sonnet 4.6 |
+| LLM extraction + summaries | `anthropic` — Claude Sonnet 4.6 |
 | Dashboard | `streamlit` |
 | Charts | `plotly` |
 | Data wrangling | `pandas` |
@@ -137,7 +153,12 @@ movieWiz/
 
 ## Cost Estimate
 
-A typical <50 KB chat (~2,000 messages → ~40 chunks) costs roughly **$0.05–$0.15** per fresh analysis with Claude Sonnet 4.6. The LLM prompt caching on the system prompt further reduces cost on repeat runs against the same model version. The local MD5 cache means you only pay LLM costs once per unique chat file.
+A typical <50 KB chat (~2,000 messages, ~20 unique movies) costs roughly **$0.10–$0.25** per fresh analysis with Claude Sonnet 4.6:
+
+- **Extraction:** ~$0.05–$0.15 (chunked message processing; prompt caching reduces repeat-run cost ~90%)
+- **Summarization:** ~$0.02–$0.05 (one call per movie)
+
+The versioned local cache means you only pay LLM costs once per unique chat file per cache version. Named sessions let you reload past analyses with zero LLM cost.
 
 ---
 
@@ -149,10 +170,13 @@ A typical <50 KB chat (~2,000 messages → ~40 chunks) costs roughly **$0.05–$
 
 ---
 
-## Roadmap (v2)
+## Roadmap
 
-- [ ] Media export support — process shared movie clip thumbnails
-- [ ] Multiple chat files — merge analysis across different groups
+- [ ] Retry / backoff on Anthropic and TMDB transient failures
+- [ ] Parallel summarizer calls (currently sequential per movie)
+- [ ] Upload size guard with user-visible warning
+- [ ] Unit tests for `parser.py` (regex-heavy, easy to regress)
 - [ ] Genre-based filtering in Movie Explorer
-- [ ] Actors / directors tab in the dashboard (data already extracted, not yet visualized)
+- [ ] Multiple chat files — merge analysis across different groups
+- [ ] Media export support — process shared movie clip thumbnails
 - [ ] Public deployment with authentication layer
