@@ -1,6 +1,5 @@
 import hashlib
 import json
-import os
 from pathlib import Path
 
 _CACHE_DIR = Path(__file__).parent / ".cache"

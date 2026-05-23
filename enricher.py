@@ -57,7 +57,6 @@ def _enrich_one(title: str, api_key: str) -> tuple[str, dict]:
 
 
 def enrich(movie_titles: list[str]) -> dict[str, dict]:
-    """Return a dict mapping movie title -> TMDB metadata."""
     api_key = os.getenv("TMDB_API_KEY")
     if not api_key:
         return {t: _empty_tmdb() for t in movie_titles}

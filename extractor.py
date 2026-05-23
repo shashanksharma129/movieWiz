@@ -84,7 +84,6 @@ def _parse_chunk(client: anthropic.Anthropic, chunk: list[dict]) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # Try to extract JSON from within the text
         start = text.find("{")
         end = text.rfind("}") + 1
         if start >= 0 and end > start:
@@ -96,7 +95,6 @@ def _parse_chunk(client: anthropic.Anthropic, chunk: list[dict]) -> dict:
 
 
 def extract(messages: list[dict]) -> dict:
-    """Extract movies and actors from all messages, returning raw combined results."""
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")

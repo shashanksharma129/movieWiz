@@ -6,7 +6,6 @@ _FUZZY_THRESHOLD = 80
 
 
 def _normalize_titles(raw_movies: list[dict]) -> dict[str, list[dict]]:
-    """Group movie mentions by fuzzy-matched title."""
     canonical: dict[str, list[dict]] = {}
 
     for mention in raw_movies:
@@ -28,11 +27,7 @@ def _normalize_titles(raw_movies: list[dict]) -> dict[str, list[dict]]:
 
 
 def build(raw_extraction: dict) -> dict:
-    """
-    Build the final aggregated data model from raw LLM extraction.
-    TMDB metadata is not attached here — call attach_tmdb() after enrichment.
-    Returns {"movies": [...], "people": {...}, "actors_directors": [...]}.
-    """
+    # tmdb is left empty ({}) — call attach_tmdb() after enrichment
     raw_movies = raw_extraction.get("movies", [])
     raw_actors = raw_extraction.get("actors_directors", [])
 
@@ -104,7 +99,6 @@ def build(raw_extraction: dict) -> dict:
 
     movies.sort(key=lambda x: x["mention_count"], reverse=True)
 
-    # Build people summary from grouped mentions (populates recommendation_count and sentiment_scores)
     people: dict[str, dict] = {}
     for canonical_title, mentions in grouped.items():
         for m in mentions:
@@ -124,7 +118,6 @@ def build(raw_extraction: dict) -> dict:
             score = float(m.get("sentiment_score") or _SENTIMENT_SCORES.get(m.get("sentiment", "neutral"), 0.5))
             people[sender]["sentiment_scores"].append(score)
 
-    # Deduplicate and merge actors/directors
     seen_names: dict[str, dict] = {}
     for a in raw_actors:
         name = a.get("name", "").strip()
@@ -155,6 +148,5 @@ def build(raw_extraction: dict) -> dict:
 
 
 def attach_tmdb(movies: list[dict], tmdb_data: dict) -> None:
-    """Attach TMDB metadata to each movie in-place, keyed by canonical title."""
     for movie in movies:
         movie["tmdb"] = tmdb_data.get(movie["title"], _empty_tmdb())

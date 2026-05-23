@@ -1,6 +1,5 @@
 import re
 from datetime import datetime
-from typing import Optional
 
 # Android: "DD/MM/YYYY, HH:MM - Name: message"
 _ANDROID_RE = re.compile(
@@ -40,7 +39,7 @@ _SYSTEM_SENDER_RE = re.compile(
 )
 
 
-def _parse_timestamp(date_str: str, time_str: str) -> Optional[datetime]:
+def _parse_timestamp(date_str: str, time_str: str) -> datetime | None:
     time_str = time_str.strip()
     formats = [
         "%d/%m/%Y %H:%M:%S",
@@ -66,7 +65,6 @@ def _parse_timestamp(date_str: str, time_str: str) -> Optional[datetime]:
 
 
 def parse(file_bytes: bytes) -> list[dict]:
-    """Parse WhatsApp .txt export bytes into a list of message dicts."""
     try:
         text = file_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -74,7 +72,7 @@ def parse(file_bytes: bytes) -> list[dict]:
 
     lines = text.splitlines()
     messages = []
-    current: Optional[dict] = None
+    current: dict | None = None
 
     for line in lines:
         line = line.strip()
@@ -94,7 +92,6 @@ def parse(file_bytes: bytes) -> list[dict]:
             current = {"timestamp": ts, "sender": sender, "text": text_part}
             messages.append(current)
         else:
-            # Continuation line of previous message
             if current is not None:
                 current["text"] += "\n" + line
 
