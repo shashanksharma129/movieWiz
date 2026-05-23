@@ -1,4 +1,4 @@
-from enricher import _empty_tmdb
+from enricher import empty_tmdb
 from thefuzz import process as fuzz_process
 
 _SENTIMENT_SCORES = {"positive": 1.0, "mixed": 0.5, "neutral": 0.5, "negative": 0.0}
@@ -149,4 +149,4 @@ def build(raw_extraction: dict) -> dict:
 
 def attach_tmdb(movies: list[dict], tmdb_data: dict) -> None:
     for movie in movies:
-        movie["tmdb"] = tmdb_data.get(movie["title"], _empty_tmdb())
+        movie["tmdb"] = tmdb_data.get(movie["title"], empty_tmdb())

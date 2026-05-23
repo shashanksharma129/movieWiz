@@ -32,7 +32,16 @@ st.set_page_config(
 
 # ── Auth gate ─────────────────────────────────────────────────────────────────
 
-if not st.user.is_logged_in:
+try:
+    _logged_in = st.user.is_logged_in
+except AttributeError:
+    st.error(
+        "Authentication is not configured. "
+        "Add `[auth]` credentials to your Streamlit secrets and redeploy."
+    )
+    st.stop()
+
+if not _logged_in:
     st.title("movieWiz 🎬")
     st.markdown("Sign in to analyse your WhatsApp movie chats.")
     st.button("Sign in with Google", on_click=st.login, type="primary")

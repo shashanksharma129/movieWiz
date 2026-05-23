@@ -37,7 +37,7 @@ def _enrich_one(title: str, api_key: str) -> tuple[str, dict]:
     try:
         hit = with_retry(_search_movie, title, api_key)
         if not hit:
-            return title, _empty_tmdb()
+            return title, empty_tmdb()
 
         details = with_retry(_get_details, hit["id"], api_key)
         poster_path = hit.get("poster_path") or details.get("poster_path")
@@ -52,7 +52,7 @@ def _enrich_one(title: str, api_key: str) -> tuple[str, dict]:
             "overview": details.get("overview") or hit.get("overview", ""),
         }
     except Exception:
-        return title, _empty_tmdb()
+        return title, empty_tmdb()
 
 
 def enrich(movie_titles: list[str]) -> dict[str, dict]:
@@ -70,7 +70,7 @@ def enrich(movie_titles: list[str]) -> dict[str, dict]:
     return result
 
 
-def _empty_tmdb() -> dict:
+def empty_tmdb() -> dict:
     return {
         "tmdb_id": None,
         "poster_url": None,
