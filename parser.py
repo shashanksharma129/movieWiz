@@ -40,6 +40,11 @@ _SYSTEM_SENDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+_MEDIA_IMAGE_RE = re.compile(
+    r"^(\S+\.(jpg|jpeg|png|webp|gif))\s*(\(file attached\))?$",
+    re.IGNORECASE,
+)
+
 
 def _parse_timestamp(date_str: str, time_str: str) -> datetime | None:
     time_str = time_str.strip()
@@ -97,6 +102,9 @@ def parse(file_bytes: bytes) -> tuple[list[dict], dict[str, str]]:
 
             ts = _parse_timestamp(date_str, time_str)
             current = {"timestamp": ts, "sender": sender, "text": text_part}
+            media_match = _MEDIA_IMAGE_RE.match(text_part.strip())
+            if media_match:
+                current["media_filename"] = media_match.group(1)
             messages.append(current)
         else:
             if current is not None:
