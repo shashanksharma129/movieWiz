@@ -74,7 +74,9 @@ def _run_pass1(
             f"Message context:\n{context}\n\n"
             "For each image (in order), identify if it shows a movie poster, title card, "
             "or recognizable film scene. Return ONLY valid JSON with this structure, no other text:\n"
-            '{"results": [{"filename": "IMG-001.jpg", "movie_title": "Dune: Part Two or null if not a movie"}]}\n'
+            '{"results": [{"filename": "IMG-001.jpg", "movie_title": "Dune: Part Two"}, '
+            '{"filename": "IMG-002.jpg", "movie_title": null}]}\n'
+            "Use JSON null (not the string \"null\") when no movie is identified.\n"
             f"Filenames in order: {filenames}"
         ),
     })
