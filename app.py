@@ -8,15 +8,16 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
+import base64
+
 import aggregator
 import cache
 import enricher
 import extractor
+import image_analyzer
 import parser
 import sessions
 import summarizer
-import base64
-import image_analyzer
 import zip_extractor
 
 load_dotenv()
@@ -246,15 +247,16 @@ if analyze_btn:
                                 "first_mentioned_at": None,
                                 "timeline": [],
                                 "shared_images": [],
+                                "opinion_summary": None,
                             })
 
                     aggregator.attach_images(data, img_analysis, image_map)
                 except Exception as e:
                     st.warning(f"Image analysis failed: {e}. Continuing without media.")
-                    data.setdefault("image_analysis", {"total_images": 0, "linked": 0, "unlinked": 0})
+                    data["image_analysis"] = {"total_images": 0, "linked": 0, "unlinked": 0}
                     for m in data["movies"]:
                         m.setdefault("shared_images", [])
-                    data.setdefault("unlinked_images", [])
+                    data["unlinked_images"] = []
         else:
             data["image_analysis"] = {"total_images": 0, "linked": 0, "unlinked": 0}
             for m in data["movies"]:
