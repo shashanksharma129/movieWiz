@@ -1,3 +1,8 @@
+import base64
+import io
+
+from PIL import Image
+
 from enricher import empty_tmdb
 from thefuzz import process as fuzz_process
 
@@ -150,3 +155,61 @@ def build(raw_extraction: dict) -> dict:
 def attach_tmdb(movies: list[dict], tmdb_data: dict) -> None:
     for movie in movies:
         movie["tmdb"] = tmdb_data.get(movie["title"], empty_tmdb())
+
+
+def _make_thumbnail(img_bytes: bytes) -> str:
+    img = Image.open(io.BytesIO(img_bytes))
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    img.thumbnail((200, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return base64.standard_b64encode(buf.getvalue()).decode()
+
+
+def attach_images(
+    data: dict,
+    analysis: dict,
+    image_map: dict[str, bytes],
+) -> None:
+    """
+    Merges image analysis results into data in-place.
+    Adds shared_images to matched movies, unlinked_images for unmatched.
+    Populates data["image_analysis"] summary.
+    """
+    movie_index = {m["title"]: m for m in data.get("movies", [])}
+    for m in data.get("movies", []):
+        m.setdefault("shared_images", [])
+    data.setdefault("unlinked_images", [])
+
+    linked = 0
+    unlinked = 0
+
+    for filename, result in analysis.items():
+        try:
+            thumbnail = _make_thumbnail(image_map[filename])
+        except Exception:
+            continue
+
+        entry = {
+            "filename": filename,
+            "sender": result.get("sender"),
+            "timestamp": result.get("timestamp"),
+            "message_context": result.get("message_context"),
+            "emotion_label": result.get("emotion_label", "neutral"),
+            "base64_thumbnail": thumbnail,
+        }
+
+        movie_title = result.get("movie_title")
+        if movie_title and movie_title in movie_index:
+            movie_index[movie_title]["shared_images"].append(entry)
+            linked += 1
+        else:
+            data["unlinked_images"].append(entry)
+            unlinked += 1
+
+    data["image_analysis"] = {
+        "total_images": linked + unlinked,
+        "linked": linked,
+        "unlinked": unlinked,
+    }
