@@ -288,8 +288,8 @@ if not movies:
     st.warning("No movies were found in this chat. Try a different export.")
     st.stop()
 
-tab1, tab2, tab4, tab5, tab6 = st.tabs(
-    ["Overview", "Movie Explorer", "Sentiment Deep Dive", "Timeline", "Actors & Directors"]
+tab1, tab2, tab4, tab5, tab_media, tab6 = st.tabs(
+    ["Overview", "Movie Explorer", "Sentiment Deep Dive", "Timeline", "Media Gallery", "Actors & Directors"]
 )
 
 # ── Tab 1: Overview ───────────────────────────────────────────────────────────
@@ -299,7 +299,15 @@ with tab1:
 
     top_movie = movies[0]["title"] if movies else "—"
     top_person = max(people, key=lambda p: people[p]["total_movie_messages"], default="—")
-    col1, col2, col3, col4 = st.columns(4)
+
+    img_stats = data.get("image_analysis", {})
+    total_images = img_stats.get("total_images", 0)
+
+    if total_images > 0:
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col5.metric("Images Shared", total_images)
+    else:
+        col1, col2, col3, col4 = st.columns(4)
     col1.metric("Movies Discussed", len(movies))
     col2.metric("People in Chat", len(people))
     col3.metric("Most Discussed", top_movie)
@@ -379,6 +387,22 @@ with tab2:
                             for q in pdata["quotes"][:3]:
                                 st.markdown(f"> *{q}*")
 
+            shared = movie.get("shared_images", [])
+            if shared:
+                with st.expander(f"📸 Group Shared ({len(shared)} images)"):
+                    img_cols = st.columns(min(len(shared), 3))
+                    for j, img_entry in enumerate(shared[:6]):
+                        with img_cols[j % 3]:
+                            b64 = img_entry.get("base64_thumbnail", "")
+                            if b64:
+                                st.image(base64.b64decode(b64), use_container_width=True)
+                            st.caption(
+                                f"{img_entry.get('sender', '')} · "
+                                f"{img_entry.get('emotion_label', '')}"
+                            )
+                            if ctx := img_entry.get("message_context"):
+                                st.caption(f"*{ctx[:60]}*")
+
             st.divider()
 
 # ── Tab 4: Sentiment Deep Dive ────────────────────────────────────────────────
@@ -455,6 +479,47 @@ with tab5:
             height=max(400, len(movies) * 30),
         )
         fig5.update_traces(marker_size=10)
+
+        # Overlay image share markers
+        image_events = []
+        for movie in movies:
+            for img_entry in movie.get("shared_images", []):
+                if img_entry.get("timestamp"):
+                    image_events.append({
+                        "timestamp": img_entry["timestamp"],
+                        "Movie": movie["title"],
+                        "Sender": img_entry.get("sender", ""),
+                        "Emotion": img_entry.get("emotion_label", ""),
+                    })
+        for img_entry in data.get("unlinked_images", []):
+            if img_entry.get("timestamp"):
+                image_events.append({
+                    "timestamp": img_entry["timestamp"],
+                    "Movie": "Unlinked",
+                    "Sender": img_entry.get("sender", ""),
+                    "Emotion": img_entry.get("emotion_label", ""),
+                })
+
+        if image_events:
+            df_imgs = pd.DataFrame(image_events)
+            df_imgs["timestamp"] = pd.to_datetime(df_imgs["timestamp"], errors="coerce")
+            df_imgs = df_imgs.dropna(subset=["timestamp"])
+            if not df_imgs.empty:
+                fig5.add_trace(
+                    go.Scatter(
+                        x=df_imgs["timestamp"],
+                        y=df_imgs["Movie"],
+                        mode="markers+text",
+                        marker=dict(symbol="circle", size=14, color="white", line=dict(width=1, color="gray")),
+                        text=["📷"] * len(df_imgs),
+                        textposition="middle center",
+                        hovertemplate="<b>Image shared</b><br>Sender: %{customdata[0]}<br>Emotion: %{customdata[1]}<extra></extra>",
+                        customdata=df_imgs[["Sender", "Emotion"]].values,
+                        name="Image shared",
+                        showlegend=True,
+                    )
+                )
+
         st.plotly_chart(fig5, use_container_width=True)
 
         st.subheader("Discussion Density Over Time")
@@ -473,6 +538,64 @@ with tab5:
                 title="Daily Movie Mentions",
             )
             st.plotly_chart(fig6, use_container_width=True)
+
+# ── Tab Media: Media Gallery ──────────────────────────────────────────────────
+
+with tab_media:
+    st.header("Media Gallery")
+
+    all_shared = []
+    for movie in movies:
+        for img_entry in movie.get("shared_images", []):
+            all_shared.append({**img_entry, "_movie": movie["title"]})
+    for img_entry in data.get("unlinked_images", []):
+        all_shared.append({**img_entry, "_movie": None})
+
+    if not all_shared:
+        st.info("No images found. Upload a WhatsApp export ZIP with media to see images here.")
+    else:
+        # Filter pills
+        movie_names_with_images = sorted(
+            {e["_movie"] for e in all_shared if e["_movie"]},
+            key=lambda t: sum(1 for e in all_shared if e["_movie"] == t),
+            reverse=True,
+        )
+        filter_options = ["All"] + movie_names_with_images
+        has_unlinked = any(e["_movie"] is None for e in all_shared)
+        if has_unlinked:
+            filter_options.append("Unlinked")
+
+        selected_filter = st.selectbox(
+            "Filter by movie",
+            filter_options,
+            label_visibility="collapsed",
+        )
+
+        if selected_filter == "All":
+            filtered = all_shared
+        elif selected_filter == "Unlinked":
+            filtered = [e for e in all_shared if e["_movie"] is None]
+        else:
+            filtered = [e for e in all_shared if e["_movie"] == selected_filter]
+
+        st.caption(f"Showing {len(filtered)} image(s)")
+
+        cols = st.columns(3)
+        for idx, img_entry in enumerate(filtered):
+            with cols[idx % 3]:
+                b64 = img_entry.get("base64_thumbnail", "")
+                if b64:
+                    st.image(base64.b64decode(b64), use_container_width=True)
+                else:
+                    st.markdown("🖼️ *No preview*")
+
+                movie_label = img_entry["_movie"] or "Unlinked"
+                st.caption(f"**{movie_label}**")
+                if img_entry.get("sender"):
+                    st.caption(f"{img_entry['sender']} · {img_entry.get('emotion_label', '')}")
+                if ctx := img_entry.get("message_context"):
+                    st.caption(f"*{ctx[:80]}*")
+                st.divider()
 
 # ── Tab 6: Actors & Directors ─────────────────────────────────────────────────
 
