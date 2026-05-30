@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 CACHE_DIR = Path(__file__).parent / ".cache"
-_CACHE_VERSION = "v2"
+_CACHE_VERSION = "v3"
 
 
 def _key(file_bytes: bytes) -> str:
