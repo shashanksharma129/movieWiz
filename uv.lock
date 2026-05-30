@@ -565,6 +565,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "pandas" },
+    { name = "pillow" },
     { name = "plotly" },
     { name = "python-dotenv" },
     { name = "requests" },
@@ -581,6 +582,7 @@ dev = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40.0" },
     { name = "pandas", specifier = ">=2.0.0" },
+    { name = "pillow", specifier = ">=10.0.0" },
     { name = "plotly", specifier = ">=5.20.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
