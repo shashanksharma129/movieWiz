@@ -186,6 +186,8 @@ def attach_images(
     unlinked = 0
 
     for filename, result in analysis.items():
+        if filename not in image_map:
+            continue
         try:
             thumbnail = _make_thumbnail(image_map[filename])
         except Exception:
