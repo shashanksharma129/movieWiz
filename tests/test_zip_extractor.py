@@ -95,3 +95,18 @@ def test_empty_image_map_when_no_images():
     z = _make_zip({"_chat.txt": CHAT_TXT})
     _, images = extract(z)
     assert images == {}
+
+
+def test_raises_on_invalid_zip_bytes():
+    with pytest.raises(ValueError, match="valid ZIP"):
+        extract(b"not a zip file at all")
+
+
+def test_duplicate_basenames_both_included():
+    z = _make_zip({
+        "FolderA/IMG-001.jpg": b"\xff\xd8\x01",
+        "FolderB/IMG-001.jpg": b"\xff\xd8\x02",
+        "_chat.txt": CHAT_TXT,
+    })
+    _, images = extract(z)
+    assert len(images) == 2  # both must be present
