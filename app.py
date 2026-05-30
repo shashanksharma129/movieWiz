@@ -15,6 +15,9 @@ import extractor
 import parser
 import sessions
 import summarizer
+import base64
+import image_analyzer
+import zip_extractor
 
 load_dotenv()
 
@@ -78,7 +81,9 @@ with st.sidebar:
         st.divider()
 
     st.subheader("New Analysis")
-    uploaded_file = st.file_uploader("Upload WhatsApp chat export (.txt)", type=["txt"])
+    uploaded_file = st.file_uploader(
+        "Upload WhatsApp export (.txt or .zip with media)", type=["txt", "zip"]
+    )
 
     if _secrets_anthropic:
         anthropic_key = _secrets_anthropic
@@ -141,20 +146,41 @@ if analyze_btn:
         os.environ["TMDB_API_KEY"] = tmdb_key
 
     file_bytes = uploaded_file.read()
+    is_zip = uploaded_file.name.lower().endswith(".zip")
 
-    _MAX_FILE_BYTES = 5 * 1024 * 1024
-    if len(file_bytes) > _MAX_FILE_BYTES:
-        st.error(
-            f"File is {len(file_bytes) / 1024 / 1024:.1f} MB — limit is 5 MB. "
-            "Export a smaller date range from WhatsApp."
-        )
-        st.stop()
+    # ── ZIP extraction ────────────────────────────────────────────────────────
+    image_map: dict[str, bytes] = {}
+    if is_zip:
+        _MAX_ZIP_BYTES = 50 * 1024 * 1024
+        if len(file_bytes) > _MAX_ZIP_BYTES:
+            st.error(
+                f"ZIP file is {len(file_bytes) / 1024 / 1024:.1f} MB — limit is 50 MB. "
+                "Export a smaller date range from WhatsApp."
+            )
+            st.stop()
+        try:
+            with st.spinner("Extracting chat and images from ZIP…"):
+                chat_bytes, image_map = zip_extractor.extract(file_bytes)
+        except ValueError as e:
+            st.error(str(e))
+            st.stop()
+        cache_bytes = file_bytes  # cache key uses original ZIP bytes
+    else:
+        _MAX_TXT_BYTES = 5 * 1024 * 1024
+        if len(file_bytes) > _MAX_TXT_BYTES:
+            st.error(
+                f"File is {len(file_bytes) / 1024 / 1024:.1f} MB — limit is 5 MB. "
+                "Export a smaller date range from WhatsApp."
+            )
+            st.stop()
+        chat_bytes = file_bytes
+        cache_bytes = file_bytes
 
     try:
-        cached_data, cache_key = cache.load(file_bytes)
+        cached_data, cache_key = cache.load(cache_bytes)
     except Exception as e:
         st.warning(f"Cache error: {e}. Running fresh analysis.")
-        cached_data, cache_key = None, cache._key(file_bytes)
+        cached_data, cache_key = None, cache._key(cache_bytes)
 
     if cached_data:
         st.session_state["data"] = cached_data
@@ -163,7 +189,7 @@ if analyze_btn:
     else:
         st.session_state["cache_status"] = "Running fresh analysis…"
         with st.spinner("Parsing chat…"):
-            messages, alias_map = parser.parse(file_bytes)
+            messages, alias_map = parser.parse(chat_bytes)
             st.session_state["alias_map"] = alias_map
 
         with st.spinner(f"Analyzing {len(messages)} messages with AI (may take a minute)…"):
@@ -183,6 +209,57 @@ if analyze_btn:
 
         with st.spinner("Generating opinion summaries…"):
             summarizer.summarize(data["movies"])
+
+        if image_map:
+            with st.spinner(f"Analyzing {len(image_map)} images with AI…"):
+                message_links = {
+                    m["media_filename"]: {
+                        "sender": m["sender"],
+                        "text": m["text"],
+                        "timestamp": str(m["timestamp"]) if m.get("timestamp") else None,
+                    }
+                    for m in messages
+                    if m.get("media_filename")
+                }
+                try:
+                    img_analysis = image_analyzer.analyze(image_map, message_links)
+
+                    # Enrich any new movies discovered from images that aren't in the text extraction
+                    existing_titles = {m["title"] for m in data["movies"]}
+                    new_titles = [
+                        t for t in {r["movie_title"] for r in img_analysis.values() if r.get("movie_title")}
+                        if t and t not in existing_titles
+                    ]
+                    if new_titles:
+                        new_tmdb = enricher.enrich(new_titles)
+                        for title in new_titles:
+                            data["movies"].append({
+                                "title": title,
+                                "tmdb": new_tmdb.get(title, enricher.empty_tmdb()),
+                                "group_sentiment": "neutral",
+                                "group_sentiment_score": 0.5,
+                                "mention_count": 0,
+                                "recommendations": 0,
+                                "avoid_signals": 0,
+                                "explicit_ratings": [],
+                                "per_person": {},
+                                "first_mentioned_at": None,
+                                "timeline": [],
+                                "shared_images": [],
+                            })
+
+                    aggregator.attach_images(data, img_analysis, image_map)
+                except Exception as e:
+                    st.warning(f"Image analysis failed: {e}. Continuing without media.")
+                    data.setdefault("image_analysis", {"total_images": 0, "linked": 0, "unlinked": 0})
+                    for m in data["movies"]:
+                        m.setdefault("shared_images", [])
+                    data.setdefault("unlinked_images", [])
+        else:
+            data["image_analysis"] = {"total_images": 0, "linked": 0, "unlinked": 0}
+            for m in data["movies"]:
+                m.setdefault("shared_images", [])
+            data.setdefault("unlinked_images", [])
 
         data["alias_map"] = alias_map
         cache.save(cache_key, data)
